@@ -1,0 +1,953 @@
+---
+title: "Flavors of Cacao Analysis"
+author: "Kwazikwakhe Nkosi"
+date: "09/07/2026"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    theme: lumen
+    highlight: tango
+    code_folding: show
+  pdf_document:
+    toc: true
+  word_document:
+    toc: true
+editor_options: 
+  chunk_output_type: console
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = TRUE, 
+  warning = FALSE, 
+  message = FALSE, 
+  fig.width = 10, 
+  fig.height = 6
+  )
+```
+
+# Install packages
+```{r cacoa}
+# Install packages
+packages <- c(
+  "tidyverse",
+  "janitor",
+  "skimr",
+  "corrplot",
+  "GGally",
+  "caret",
+  "randomForest",
+  "DataExplorer"
+)
+installed <- packages %in% installed.packages()
+
+if(any(!installed))
+  install.packages(packages[!installed])
+install.packages("naniar")
+```
+
+# Load Package
+
+```{r}
+library(tidyverse)
+library(janitor)
+library(skimr)
+library(corrplot)
+library(GGally)
+library(caret)
+library(randomForest)
+library(DataExplorer)
+library(dplyr)
+library(stringr)
+library(naniar)
+
+```
+
+# Import Dataset
+
+```{r}
+# Import Dataset
+df_cacoa1 <- read_csv(
+  "flavors_of_cacao.csv",
+  locale = locale(encoding = "Latin1")
+)
+```
+
+# Clean Column Names
+
+```{r}
+df_cacoa <- df_cacoa1 %>%
+    clean_names()
+
+names(df_cacoa)
+```
+
+## Rename some variables
+
+```{r}
+df_cacoa <- df_cacoa |>
+  rename(
+    company = company_a_maker_if_known,
+    specific_origin = specific_bean_origin_or_bar_name,
+    review_year = review_date,
+    broad_origin = broad_bean_origin
+  )
+```
+
+## Clean text columns 
+
+```{r}
+
+df_cacoa$cocoa_percent <- as.numeric(str_remove(df_cacoa$cocoa_percent, "%"))
+  
+#function to clean text columns
+clean_text <- function(x){
+  
+  #remove non breaking spaces
+  x <- stringr::str_replace_all(x, "\u00A0", "")
+  
+  #remove all non ASCII characters
+  x <- iconv(x, from= "UTF-8", to = "ASCII", sub = "")
+  
+  #trim white space
+  x[x=="" | is.na(x)] <- "unknown"
+  
+  return(x)
+}
+
+#apply to all character columns
+df_cacoa <- df_cacoa %>%
+  mutate(
+    across(
+      c(company,specific_origin,
+        company_location,
+        bean_type, 
+        broad_origin),
+      clean_text)
+    )
+
+#convert to numeric
+df_cacoa <- df_cacoa %>%
+  mutate(
+    cocoa_percent = as.numeric(cocoa_percent),
+    rating = as.numeric(rating)
+  )
+# Data quality checks
+print(colSums(is.na(df_cacoa)))
+print(sum(duplicated(df_cacoa)))
+summary(df_cacoa)
+```
+
+# Distribution of Cocoa Percentage
+
+```{r}
+# Outliers
+# Distribution of Cocoa Percentage
+
+ggplot(df_cacoa, aes(x = cocoa_percent)) +
+  geom_histogram(
+    aes(y = after_stat(density)),
+    binwidth = 0.05,
+    fill = "#8B4513",      # Chocolate brown
+    colour = "white",
+    linewidth = 0.4,
+    alpha = 0.85
+  ) +
+  geom_density(
+    colour = "#2E4057",    # Dark blue
+    linewidth = 1.3
+  ) +
+  scale_x_continuous(
+    labels = scales::percent_format(accuracy = 1),
+    breaks = seq(0.4, 1.0, by = 0.1)
+  ) +
+  labs(
+    title = "Distribution of Cacao Percentage",
+    subtitle = "Distribution of cacao content across all reviewed chocolate bars",
+    x = "Cacao Percentage",
+    y = "Density"
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(
+    plot.title = element_text(face = "bold", hjust = 0.5, size = 16),
+    plot.subtitle = element_text(hjust = 0.5, colour = "grey40"),
+    axis.title = element_text(face = "bold"),
+    axis.text = element_text(colour = "black"),
+    panel.grid.minor = element_blank(),
+    panel.grid.major.x = element_line(colour = "grey85"),
+    panel.grid.major.y = element_line(colour = "grey90")
+  )
+```
+## Description
+
+This histogram illustrates the frequency distribution of cocoa percentages among all reviewed chocolate bars.
+
+## Technical Interpretation
+
+The cocoa percentages are heavily concentrated between 60% and 75%, with approximately 70% cocoa representing the most common formulation. Chocolates containing extremely low or extremely high cocoa percentages occur much less frequently.
+
+## Business Interpretation
+
+Manufacturers tend to formulate products within the cocoa range most preferred by consumers. This concentration suggests that balancing bitterness and sweetness around 70% cocoa provides the greatest commercial appeal.
+
+## Key Insight
+
+Most premium chocolates are produced with cocoa percentages between 60% and 75%.
+
+# Rating Distribution
+
+```{r}
+# Rating Distribution
+ggplot(df_cacoa, aes(x = rating)) +
+  geom_histogram(binwidth = 0.25,
+                 fill = "skyblue",
+                 colour = "black") +
+  geom_density(aes(y = after_stat(count * 0.25)),
+               colour = "darkred",
+               linewidth = 1) +
+  labs(
+    title = "Distribution of Chocolate Ratings",
+    x = "Rating",
+    y = "Frequency"
+  ) +
+  theme_minimal()
+```
+
+The near-normal distribution of ratings suggests that the chocolate review process is balanced and does not disproportionately favour either very high or very low ratings. This provides confidence that the dataset offers a representative assessment of premium chocolate products. From a business perspective, the findings imply that manufacturers generally meet consumer expectations, but only a small proportion successfully exceed them. Companies aiming to strengthen their market position should focus on continuous product improvement and innovation to achieve ratings above 4.0, where products are more likely to be recognised as premium or award-winning.
+
+
+# Missingness
+
+```{r}
+# Missingness
+gg_miss_var(df_cacoa)
+```
+
+# Correlation plot
+
+```{r}
+# Correlation
+num <- df_cacoa|>select(cocoa_percent,review_year,rating)
+corrplot(cor(num),method="color",addCoef.col="black")
+
+```
+
+# Feature Engineering
+
+```{r}
+# Feature Engineering
+df_cacoa <- df_cacoa |>
+  mutate(
+    cocoa_group=case_when(
+      cocoa_percent<0.60~"Low",
+      cocoa_percent<0.75~"Medium",
+      cocoa_percent<0.85~"High",
+      TRUE~"Very High"
+    ),
+    Elite=ifelse(rating>=3.75,1,0)
+  )
+
+# Create Rating Groups
+df_cacoa <- df_cacoa %>%
+  mutate(
+    rating_group = case_when(
+      rating < 2.5 ~ "Low",
+      rating < 4.0 ~ "Medium",
+      TRUE ~ "High"
+    )
+  )
+
+# Create Cocoa Percentage Groups
+# Create Cocoa Percentage Groups
+df_cacoa <- df_cacoa %>%
+  mutate(
+    cocoa_group = case_when(
+      cocoa_percent >= 40 & cocoa_percent <= 59 ~ "Low",
+      cocoa_percent >= 60 & cocoa_percent <= 74 ~ "Medium",
+      cocoa_percent >= 75 & cocoa_percent <= 89 ~ "High",
+      cocoa_percent >= 90 & cocoa_percent <= 100 ~ "Very High",
+      TRUE ~ NA_character_
+    )
+  )
+
+
+
+```
+
+# Scatter Plot
+
+```{r}
+# Scatter
+ggplot(df_cacoa,aes(cocoa_percent,rating))+
+  geom_point(alpha=.4)+
+  geom_smooth(method="lm")+
+  theme_minimal()
+
+
+```
+## Description
+
+This scatter plot examines the relationship between cocoa percentage and chocolate rating.
+
+## Technical Interpretation
+
+The observations are widely dispersed with no clear linear trend, indicating a weak relationship between cocoa percentage and chocolate ratings.
+
+## Business Interpretation
+
+Simply increasing cocoa percentage does not improve consumer ratings. Manufacturers should instead focus on ingredient quality, processing methods, flavour balance, and overall sensory experience.
+
+## Key Insight
+
+Higher cocoa content alone does not guarantee higher-quality chocolate.
+
+# Histogram of Chocolate Ratings
+
+```{r}
+# Histograms
+# Histogram of Chocolate Ratings
+
+ggplot(df_cacoa, aes(x = rating)) +
+  geom_histogram(
+    bins = 15,
+    fill = "#2C7FB8",      # Professional blue
+    colour = "white",
+    linewidth = 0.4
+  ) +
+  labs(
+    title = "Distribution of Chocolate Ratings",
+    subtitle = "Frequency of ratings in the Flavors of Cacao dataset",
+    x = "Rating",
+    y = "Number of Reviews"
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(
+    plot.title = element_text(face = "bold", hjust = 0.5),
+    plot.subtitle = element_text(hjust = 0.5),
+    axis.title = element_text(face = "bold"),
+    panel.grid.minor = element_blank()
+  )
+```
+
+The distribution demonstrates that reviewers consistently rate most chocolate products positively, reflecting the overall maturity and quality of the premium chocolate market. Since the ratings cluster within a narrow range, manufacturers face strong competition, where even small improvements in flavour, texture, aroma, and bean sourcing can significantly influence consumer perception and product differentiation. Therefore, organisations aiming to strengthen their competitive position should prioritise continuous quality improvement and innovation rather than relying solely on increasing cocoa content or expanding product offerings.
+
+# Distribution of Cocoa Percentage
+
+```{r}
+ggplot(df_cacoa, aes(x = cocoa_percent)) +
+  geom_histogram(
+    aes(y = after_stat(density)),
+    bins = 20,
+    fill = "#8B4513",
+    colour = "white",
+    alpha = 0.8
+  ) +
+  geom_density(
+    colour = "#4E342E",
+    linewidth = 1.2
+  ) +
+  scale_x_continuous(labels = scales::percent_format(accuracy = 1)) +
+  labs(
+    title = "Distribution of Cocoa Percentage",
+    subtitle = "Histogram with Density Curve",
+    x = "Cacao Percentage",
+    y = "Density"
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(
+    plot.title = element_text(face = "bold", hjust = 0.5),
+    plot.subtitle = element_text(hjust = 0.5),
+    axis.title = element_text(face = "bold"),
+    panel.grid.minor = element_blank()
+  )
+
+```
+
+The cocoa percentage distribution demonstrates a clear industry preference for medium-to-high cocoa formulations. This suggests that manufacturers have largely converged on cocoa percentages that optimise consumer acceptance and product quality. Although cocoa percentage is an important product characteristic, it should not be viewed as the sole indicator of chocolate quality. As shown in subsequent analyses, factors such as bean origin, fermentation, roasting techniques, flavour balance, and manufacturing expertise play equally important roles in determining consumer ratings. Consequently, manufacturers seeking a competitive advantage should focus on delivering exceptional sensory experiences within the preferred cocoa percentage range rather than simply increasing cocoa content.
+
+# Distribution of Ratings
+
+```{r}
+ggplot(df_cacoa,aes(rating))+geom_density(fill="steelblue",alpha=.4)
+```
+The density plot reinforces the findings from the histogram by providing a clearer view of the overall distribution of ratings. The single prominent peak demonstrates that reviewer assessments are relatively consistent across the dataset, with no evidence of distinct quality clusters. This suggests that the premium chocolate market is highly competitive, where most products meet similar quality standards. Consequently, manufacturers aiming to distinguish themselves should focus on continuous product innovation, premium cocoa sourcing, and sensory quality improvements to achieve ratings that exceed the industry norm.
+
+# Distribution of Chocolate Ratings by Rating Group
+
+```{r}
+#Summarise the Groups
+rating_summary <- df_cacoa %>%
+  group_by(rating_group) %>%
+  summarise(
+    Count = n(),
+    .groups = "drop"
+  )
+
+
+# Distribution of Chocolate Ratings by Rating Group
+
+rating_summary$rating_group <- factor(
+  rating_summary$rating_group,
+  levels = c("Low", "Medium", "High")
+)
+
+ggplot(rating_summary,
+       aes(x = rating_group,
+           y = Count,
+           fill = rating_group)) +
+  geom_col(width = 0.65, colour = "white") +
+  geom_text(aes(label = Count),
+            vjust = -0.4,
+            size = 5,
+            fontface = "bold") +
+  scale_fill_manual(values = c(
+    "Low" = "#D73027",
+    "Medium" = "#F4A261",
+    "High" = "#2A9D8F"
+  )) +
+  labs(
+    title = "Distribution of Chocolate Ratings",
+    subtitle = "Number of chocolate bars in each rating category",
+    x = "Rating Group",
+    y = "Frequency"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    plot.title = element_text(face = "bold", hjust = 0.5),
+    plot.subtitle = element_text(hjust = 0.5),
+    axis.title = element_text(face = "bold"),
+    axis.text = element_text(colour = "black"),
+    legend.position = "none",
+    panel.grid.minor = element_blank()
+  )
+
+```
+
+The distribution of rating groups reinforces earlier findings from the histogram and density plot, which showed that chocolate ratings cluster around the middle of the rating scale. This consistency suggests that the premium chocolate industry maintains a relatively high standard of quality, with few products receiving extremely poor or exceptional ratings.
+
+The overwhelming concentration in the Medium category also indicates that manufacturers operate in a highly competitive market where most products offer similar levels of quality. Consequently, companies aiming to gain a competitive advantage should focus on innovations in flavour development, premium bean sourcing, sustainable production practices, and overall consumer experience to move products from the medium category into the high-performing segment.
+
+# Country summaries
+
+```{r}
+# Country summaries
+country_summary <- df_cacoa |>
+  group_by(company_location) |>
+  summarise(Reviews=n(),Average_Rating=mean(rating),.groups="drop")
+
+
+```
+
+# Top 10 Countries by Average Chocolate Rating
+
+```{r}
+# Top 10 Countries by Average Chocolate Rating
+
+top_countries <- country_summary %>%
+  arrange(desc(Average_Rating)) %>%
+  slice_head(n = 10)
+
+ggplot(top_countries,
+       aes(x = reorder(company_location, Average_Rating),
+           y = Average_Rating,
+           fill = Average_Rating)) +
+  geom_col(width = 0.7) +
+  geom_text(aes(label = round(Average_Rating, 2)),
+            hjust = -0.15,
+            size = 4) +
+  coord_flip() +
+  scale_fill_gradient(
+    low = "#66C2A5",
+    high = "#006D2C"
+  ) +
+  labs(
+    title = "Top 10 Countries by Average Chocolate Rating",
+    subtitle = "Average ratings based on chocolate reviews",
+    x = "Company Location",
+    y = "Average Rating"
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(
+    plot.title = element_text(face = "bold", hjust = 0.5),
+    plot.subtitle = element_text(hjust = 0.5),
+    axis.title = element_text(face = "bold"),
+    legend.position = "none",
+    panel.grid.minor = element_blank()
+  ) +
+  expand_limits(y = max(top_countries$Average_Rating) + 0.2)
+
+
+
+```
+
+The analysis indicates that differences in average chocolate ratings among the leading countries are relatively small, suggesting that the premium chocolate industry maintains high standards worldwide. Rather than one country dominating the market, several countries consistently produce products that receive favourable consumer evaluations.
+
+These findings imply that competitive advantage is determined less by geographic location and more by factors such as high-quality cocoa sourcing, manufacturing expertise, flavour innovation, sustainability practices, and quality assurance. Consequently, chocolate manufacturers should focus on continuous product improvement and differentiation to enhance customer satisfaction and strengthen their position within the global premium chocolate market.
+
+# Top 10 Countries by Number of Reviews
+
+```{r}
+# Top 10 Countries by Number of Reviews
+
+top_reviews <- country_summary %>%
+  arrange(desc(Reviews)) %>%
+  slice_head(n = 10)
+
+ggplot(top_reviews,
+       aes(x = reorder(company_location, Reviews),
+           y = Reviews,
+           fill = Reviews)) +
+  geom_col(width = 0.7) +
+  geom_text(aes(label = Reviews),
+            hjust = -0.2,
+            size = 4) +
+  coord_flip() +
+  scale_fill_gradient(
+    low = "#74A9CF",
+    high = "#045A8D"
+  ) +
+  labs(
+    title = "Top 10 Countries by Number of Chocolate Reviews",
+    subtitle = "Countries with the highest number of reviewed chocolate bars",
+    x = "Company Location",
+    y = "Number of Reviews"
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(
+    plot.title = element_text(face = "bold", hjust = 0.5),
+    plot.subtitle = element_text(hjust = 0.5),
+    axis.title = element_text(face = "bold"),
+    legend.position = "none",
+    panel.grid.minor = element_blank()
+  ) +
+  expand_limits(y = max(top_reviews$Reviews) + 20)
+```
+
+
+
+# Average Rating Trend by Review Year
+
+```{r}
+# Trends
+# Average Rating Trend by Review Year
+
+yr <- df_cacoa %>%
+  group_by(review_year) %>%
+  summarise(
+    Average_Rating = mean(rating),
+    Reviews = n(),
+    .groups = "drop"
+  )
+
+ggplot(yr, aes(x = review_year, y = Average_Rating)) +
+  geom_line(
+    colour = "#2C7FB8",
+    linewidth = 1.2
+  ) +
+  geom_point(
+    colour = "#D95F02",
+    size = 3
+  ) +
+  geom_text(
+    aes(label = round(Average_Rating, 2)),
+    vjust = -0.8,
+    size = 3.8,
+    fontface = "bold"
+  ) +
+  scale_x_continuous(breaks = yr$review_year) +
+  scale_y_continuous(
+    limits = c(min(yr$Average_Rating) - 0.1,
+               max(yr$Average_Rating) + 0.15)
+  ) +
+  labs(
+    title = "Average Chocolate Rating by Review Year",
+    subtitle = "Trend in average chocolate ratings over time",
+    x = "Review Year",
+    y = "Average Rating (0–5 Stars)",
+    caption = "Source: Flavors of Cacao Dataset"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    plot.title = element_text(face = "bold", size = 16, hjust = 0.5),
+    plot.subtitle = element_text(size = 11, hjust = 0.5, colour = "grey40"),
+    axis.title = element_text(face = "bold"),
+    axis.text = element_text(colour = "black"),
+    panel.grid.minor = element_blank()
+  )
+```
+
+# Cocoa Distribution
+
+```{r}
+# Cocoa Distribution
+
+# Distribution of Cocoa Percentage
+
+ggplot(df_cacoa, aes(x = cocoa_percent)) +
+  geom_histogram(
+    bins = 20,
+    fill = "#8B4513",       # Chocolate brown
+    colour = "white",
+    linewidth = 0.5
+  ) +
+  scale_x_continuous(
+    labels = scales::percent_format(accuracy = 1),
+    breaks = seq(0.4, 1.0, by = 0.1)
+  ) +
+  labs(
+    title = "Distribution of Cacao Percentage",
+    subtitle = "Frequency of cacao content across reviewed chocolate",
+    x = "Cacao Percentage",
+    y = "Frequency",
+    caption = "Source: Flavors of Cacao Dataset"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    plot.title = element_text(
+      face = "bold",
+      size = 16,
+      hjust = 0.5
+    ),
+    plot.subtitle = element_text(
+      size = 11,
+      colour = "grey40",
+      hjust = 0.5
+    ),
+    axis.title = element_text(face = "bold"),
+    axis.text = element_text(colour = "black"),
+    panel.grid.minor = element_blank()
+  )
+
+```
+
+# Top 15 Chocolate Companies by Number of Reviews
+
+```{r}
+company_reviews <- df_cacoa %>%
+  count(company, sort = TRUE) %>%
+  slice(1:15)
+
+ggplot(company_reviews,
+       aes(reorder(company, n), n)) +
+  geom_col(fill = "darkorange") +
+  coord_flip() +
+  labs(
+    title = "Top 15 Chocolate Companies by Number of Reviews",
+    x = "Company",
+    y = "Number of Reviews" 
+  ) +
+  theme_minimal()
+
+```
+
+# Average Rating by Cocoa Percentage Group
+
+```{r}
+
+## Average Rating by Cocoa Percentage Group
+
+avg_rating <- df_cacoa %>%
+  group_by(cocoa_group) %>%
+  summarise(
+    Average_Rating = mean(rating, na.rm = TRUE),
+    Reviews = n(),
+    .groups = "drop"
+  )
+
+# Order the groups
+df_cacoa$cocoa_group <- factor(
+  df_cacoa$cocoa_group,
+  levels = c("Low", "Medium", "High", "Very High")
+)
+
+ggplot(avg_rating,
+       aes(x = cocoa_group,
+           y = Average_Rating,
+           fill = cocoa_group)) +
+  geom_col(width = 0.7) +
+  geom_text(
+    aes(label = round(Average_Rating, 2)),
+    vjust = -0.4,
+    size = 4.5,
+    fontface = "bold"
+  ) +
+  scale_fill_manual(values = c(
+    "Low" = "#F4A261",
+    "Medium" = "#E9C46A",
+    "High" = "#8B4513",
+    "Very High" = "#5D4037"
+  )) +
+  labs(
+    title = "Average Chocolate Rating by Cocoa Percentage Group",
+    subtitle = "Chocolate bars grouped by cocoa percentage",
+    x = "Cocoa Percentage Group",
+    y = "Average Rating"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    plot.title = element_text(face = "bold", hjust = 0.5),
+    plot.subtitle = element_text(hjust = 0.5),
+    axis.title = element_text(face = "bold"),
+    legend.position = "none",
+    panel.grid.minor = element_blank()
+  )
+```
+
+# Average Rating by Bean Type (Top 15)
+
+```{r}
+#  Average Rating by Bean Type (Top 15)
+bean_summary <- df_cacoa %>%
+  group_by(bean_type) %>%
+  summarise(
+    Average_Rating = mean(rating),
+    Reviews = n()
+  ) %>%
+  filter(Reviews >= 5) %>%
+  arrange(desc(Average_Rating))
+
+ggplot(head(bean_summary,15),
+       aes(reorder(bean_type, Average_Rating),
+           Average_Rating,
+           fill = Average_Rating)) +
+  geom_col() +
+  coord_flip() +
+  theme_minimal() +
+  labs(
+    title="Average Rating by Bean Type",
+    x="Bean Type",
+    y="Average Rating"
+  )
+
+```
+
+# Number of Chocolates by Bean Type
+
+```{r}
+## Number of Chocolates by Bean Type
+
+bean_counts <- df_cacoa %>%
+  count(bean_type, sort = TRUE) %>%
+  slice_head(n = 10)
+
+ggplot(bean_counts,
+       aes(x = reorder(bean_type, n),
+           y = n,
+           fill = bean_type)) +
+  geom_col() +
+  coord_flip() +
+  labs(
+    title = "Top 10 Most Common Bean Types",
+    x = "Bean Type",
+    y = "Number of Chocolates"
+  ) +
+  theme_minimal() +
+  theme(legend.position = "none")
+```
+
+# Review Frequency by Year and Cocoa Group
+
+```{r}
+
+# Review Frequency by Year and Cocoa Group
+
+heat_data <- df_cacoa %>%
+  count(review_year, cocoa_group)
+
+ggplot(heat_data,
+       aes(x = review_year,
+           y = n,
+           colour = cocoa_group,
+           group = cocoa_group)) +
+  geom_line(linewidth = 1.3) +
+  geom_point(size = 3.5) +
+  scale_colour_manual(values = c(
+    "Low" = "#FFC107",        # Gold
+    "Medium" = "#2196F3",     # Blue
+    "High" = "#4CAF50",       # Green
+    "Very High" = "#E53935"   # Red
+  )) +
+  labs(
+    title = "Review Trends by Cocoa Percentage Group",
+    subtitle = "Number of chocolate reviews across review years",
+    x = "Review Year",
+    y = "Number of Reviews",
+    colour = "Cocoa Percentage Group"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    plot.title = element_text(face = "bold", hjust = 0.5),
+    plot.subtitle = element_text(hjust = 0.5),
+    axis.title = element_text(face = "bold"),
+    axis.text = element_text(colour = "black"),
+    legend.position = "right",
+    panel.grid.minor = element_blank()
+  )
+```
+## Description
+
+The line chart illustrates the number of chocolate reviews conducted each year across four cocoa percentage groups: Low, Medium, High, and Very High. The x-axis represents the review year, while the y-axis represents the number of chocolate reviews. Each coloured line tracks the review frequency for a specific cocoa percentage group over time.
+
+## Technical Interpretation
+
+The chart reveals distinct temporal patterns in review frequency across cocoa percentage groups.
+
+The Medium cocoa group (60–75%) consistently records the highest number of reviews throughout the study period. Reviews increase steadily from approximately 45 reviews in 2006 to a peak of over 200 reviews in 2015, before declining sharply in 2017.
+The High cocoa group (76–89%) follows a similar but less pronounced trend, increasing gradually from around 25 reviews to approximately 75 reviews before declining towards the end of the review period.
+The Low cocoa group (<60%) and Very High cocoa group (≥90%) remain relatively stable across all years, each receiving fewer than 10 reviews annually, indicating very limited representation in the dataset.
+The noticeable decline across all cocoa groups in 2017 is most likely due to incomplete data collection for that year rather than an actual reduction in chocolate reviews.
+
+Overall, the results demonstrate that chocolates with medium cocoa percentages dominate the dataset, while chocolates at the extreme ends of the cocoa spectrum are reviewed far less frequently.
+
+## Business Interpretation
+
+The findings suggest that consumers and reviewers overwhelmingly favour medium cocoa chocolates, particularly those containing between 60% and 75% cocoa. This cocoa range represents the largest segment of the premium chocolate market and aligns closely with consumer preferences for balancing cocoa intensity with sweetness and flavour complexity.
+
+The steady growth in reviews until 2015 indicates increasing market interest and product availability within this category. Conversely, chocolates with very high cocoa content (90% and above) appeal to a niche market consisting of consumers who prefer intense dark chocolate flavours. Their consistently low review counts should therefore be interpreted as limited market size rather than poor product quality.
+
+Similarly, chocolates with lower cocoa percentages appear less frequently because premium chocolate reviewers tend to focus on darker chocolate products.
+
+The sharp reduction in review counts during 2017 should be interpreted cautiously, as it likely reflects an incomplete review period instead of declining consumer demand.
+
+## Key Insight
+
+The premium chocolate market is strongly concentrated around medium cocoa percentages (60–75%), which consistently receive the greatest number of reviews. Both low- and very high-cocoa chocolates occupy specialised market segments with comparatively lower consumer and reviewer attention.
+
+
+#  Pie Chart of Cocoa Groups
+
+```{r}
+# 7. Pie Chart of Cocoa Groups
+
+ggplot(df_cacoa,
+       aes(x="",
+           fill=cocoa_group)) +
+  geom_bar(width=1) +
+  coord_polar("y") +
+  labs(title="Distribution of Cacao Groups") +
+  theme_void()
+```
+
+#  Pie Chart of Elite vs Non-Elite Chocolate
+
+```{r}
+# 8. Pie Chart of Elite vs Non-Elite Chocolate
+ggplot(df_cacoa,
+       aes(x="",
+           fill=as.factor(Elite))) +
+  geom_bar(width=1) +
+  coord_polar("y") +
+  labs(
+    title="Elite Chocolate Distribution",
+    fill="Elite"
+  ) +
+  theme_void()
+```
+
+# Average Chocolate Rating by Cocoa Percentage Group
+
+```{r}
+avg_rating <- df_cacoa %>%
+  group_by(cocoa_group) %>%
+  summarise(
+    Average_Rating = mean(rating),
+    .groups = "drop"
+  )
+
+ggplot(avg_rating,
+       aes(x = cocoa_group,
+           y = Average_Rating,
+           fill = cocoa_group)) +
+  geom_col() +
+  geom_text(aes(label = round(Average_Rating, 2)),
+            vjust = -0.3,
+            size = 4) +
+  labs(
+    title = "Average Chocolate Rating by Cocoa Percentage Group",
+    x = "Cacao Percentage Group",
+    y = "Average Rating"
+  ) +
+  theme_minimal() +
+  theme(legend.position = "none")
+```
+
+#  Bean Type Frequencies
+
+```{r}
+# 10. Bean Type Frequencies
+df_cacoa %>%
+  count(bean_type, sort=TRUE) %>%
+  slice(1:15) %>%
+  ggplot(aes(reorder(bean_type,n),
+             n,
+             fill=n)) +
+  geom_col() +
+  coord_flip() +
+  theme_minimal() +
+  labs(
+    title="Most Common Bean Types",
+    x="Bean Type",
+    y="Count"
+  )
+```
+
+# Top Broad Bean Origin
+
+```{r}
+# 11. Broad Bean Origin Frequencies
+df_cacoa %>%
+  count(broad_origin, sort=TRUE) %>%
+  slice(1:15) %>%
+  ggplot(aes(reorder(broad_origin,n),
+             n,
+             fill=n)) +
+  geom_col() +
+  coord_flip() +
+  theme_minimal() +
+  labs(
+    title="Top Broad Bean Origins",
+    x="Origin",
+    y="Reviews"
+  )
+```
+
+#  Average Rating by Cocoa Percentage Group
+
+```{r}
+avg_rating <- df_cacoa %>%
+  group_by(cocoa_group) %>%
+  summarise(Average_Rating = mean(rating))
+
+ggplot(avg_rating,
+       aes(x = cocoa_group,
+           y = Average_Rating,
+           fill = cocoa_group)) +
+  geom_col() +
+  geom_text(aes(label = round(Average_Rating, 2)),
+            vjust = -0.4) +
+  labs(
+    title = "Average Rating by Cocoa Percentage Group",
+    x = "Cacao Group",
+    y = "Average Rating"
+  ) +
+  theme_minimal() +
+  theme(legend.position = "none")
+```
+### Technical Interpretation
+
+The scatter plot reveals little evidence of a strong linear relationship between cocoa percentage and chocolate rating. Ratings remain relatively consistent across the range of cocoa percentages, with observations dispersed around similar rating values.
+
+### Business Interpretation
+
+Consumers do not necessarily rate chocolates more highly simply because they contain more cocoa. Manufacturers should focus on improving overall sensory quality, ingredient sourcing, and production methods rather than increasing cocoa percentage alone.
+
+
+# Overall Conclusion
+
+The exploratory data analysis provides valuable insights into the characteristics of premium chocolate products and the factors influencing consumer ratings. Most chocolates received ratings between 3.0 and 3.75, indicating generally positive product quality across the industry. Cocoa percentages between 60% and 75% were the most common and consistently attracted the highest review frequency, suggesting this range aligns well with consumer preferences.
+
+The analysis further revealed that cocoa percentage alone has only a weak relationship with product ratings, implying that chocolate quality is influenced by multiple factors including bean origin, manufacturing practices, flavour development, and ingredient quality. While several countries dominate both cocoa production and chocolate manufacturing, average ratings remain relatively consistent across locations, highlighting the global competitiveness of premium chocolate producers.
+
+Additionally, review patterns over time indicate sustained interest in premium chocolate products, with niche "Elite" high-cocoa chocolates serving specialised markets rather than mainstream consumers. Overall, the findings suggest that manufacturers seeking competitive advantage should prioritise product quality, sourcing excellence, flavour innovation, and consumer experience rather than relying solely on cocoa content. These insights can support strategic decision-making in product development, market positioning, and premium chocolate branding.
